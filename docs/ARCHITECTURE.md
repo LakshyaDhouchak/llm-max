@@ -9,35 +9,34 @@ It defines component boundaries, data flow, storage, and the repo layout.
 
 ## 1. Component Map
 
-```
-┌───────────────────────────────────────────────────────────────── ──┐
-│                         USER'S MACHINE                             │
-│                                                                    │
-│  ┌────────────────────┐        ┌──────────────────────────────┐    │
-│  │   llm-max CLI      │        │  llm-max-agentd (local API)  │    │
-│  │   (Python, Click)  │◄──────►│  FastAPI, runs as daemon     │    │
-│  │                    │        │  wraps the same core lib     │    │
-│  └─────────┬──────────┘        └───────────┬──────────────────┘    │
-│            │                               │                       │
-│            ▼                               ▼                       │
-│  ┌─────────────────────────────────────────────────────────────┐   │
-│  │              llm-max-core (Python library)                  │   │
-│  │  - hardware_profiler   (GPU/CPU/RAM detection)              │   │
-│  │  - runtime_adapters     (Ollama / vLLM / llama.cpp)         │   │
-│  │  - model_catalog        (compatibility scoring)             │   │
-│  │  - benchmarker          (latency/throughput sampling)       │   │
-│  │  - autotuner            (LangGraph state machine)           │   │
-│  │  - telemetry_producer   (Avro → Kafka, optional)            │   │
-│  └───────┬───────────────────────┬───────────────────┬─────────┘   │
-│          │                       │                   │             │
-│          ▼                       ▼                   ▼             │
-│    ┌──────────┐           ┌───────────┐       ┌──────────────┐     │
-│    │  MySQL   │           │   Redis   │       │ Kafka (opt.) │     │
-│    │ (Flyway) │           │ (live     │       │ + Schema     │     │
-│    │ history  │           │  status)  │       │  Registry    │     │
-│    └────┬─────┘           └─────┬─────┘       └──────┬───────┘     │
-│         │                       │                     │            │
-└─────────┼───────────────────────┼─────────────────────┼────────────┘
+┌─────────────────────────────────────────────────────────────────────┐
+│                         USER'S MACHINE                              │
+│                                                                     │
+│  ┌────────────────────┐        ┌──────────────────────────────┐     │
+│  │   llm-max CLI      │        │  llm-max-agentd (local API)  │     │
+│  │   (Python, Click)  │◄──────►│  FastAPI, runs as daemon     │     │
+│  │                    │        │  wraps the same core lib     │     │
+│  └─────────┬──────────┘        └───────────┬──────────────────┘     │
+│            │                               │                        │
+│            ▼                               ▼                        │
+│  ┌─────────────────────────────────────────────────────────────┐    │
+│  │              llm-max-core (Python library)                  │    │
+│  │  - hardware_profiler   (GPU/CPU/RAM detection)              │    │
+│  │  - runtime_adapters     (Ollama / vLLM / llama.cpp)         │    │
+│  │  - model_catalog        (compatibility scoring)             │    │
+│  │  - benchmarker          (latency/throughput sampling)       │    │
+│  │  - autotuner            (LangGraph state machine)           │    │
+│  │  - telemetry_producer   (Avro → Kafka, optional)            │    │
+│  └───────┬───────────────────────┬───────────────────┬─────────┘    │
+│          │                       │                   │              │
+│          ▼                       ▼                   ▼              │
+│    ┌──────────┐           ┌───────────┐       ┌──────────────┐      │
+│    │  MySQL   │           │   Redis   │       │ Kafka (opt.) │      │
+│    │ (Flyway) │           │ (live     │       │ + Schema     │      │
+│    │ history  │           │  status)  │       │  Registry    │      │
+│    └────┬─────┘           └─────┬─────┘       └──────┬───────┘      │
+│         │                       │                     │             │
+└─────────┼───────────────────────┼─────────────────────┼─────────────┘
           │                       │                     │
           ▼                       ▼                     ▼
 ┌───────────────────────────────────────────────────────────────────┐
@@ -52,7 +51,6 @@ It defines component boundaries, data flow, storage, and the repo layout.
 │              ▼                                                    │
 │      React/simple frontend (dashboard)                            │
 └───────────────────────────────────────────────────────────────────┘
-```
 
 **Key principle:** the CLI works completely standalone with zero services running
 (MySQL/Redis/Kafka are all optional, degrade gracefully to file-based storage
@@ -121,7 +119,6 @@ This is the full target structure. Status markers show what's actually built
 breakdown. `deploy/` (systemd/Helm/Kubernetes) is confirmed in scope for a
 future fleet-deployment phase, even though early phases are single-machine.
 
-```
 llm-max/
 ├── core/                                   # Python CLI + optimization engine
 │   ├── llm_max/
@@ -130,9 +127,11 @@ llm-max/
 │   │   ├── config.py                       # ⏳ env vars + ~/.llm-max/config.yaml
 │   │   ├── domain.py                       # ✅ Pydantic domain entities
 │   │   ├── profiler/
-│   │   │   ├── base.py                     # ⏳ HardwareProvider abstraction
-│   │   │   ├── detector.py                 # ⏳ combines CPU/RAM/GPU providers
-│   │   │   ├── hardware.py                 # ✅ current: combined CPU/RAM/NVIDIA scan
+│   │   │   ├── __init__.py                 # ✅
+│   │   │   ├── base.py                     # ✅ GpuProvider ABC
+│   │   │   ├── detector.py                 # ✅ combines system info + GpuProviders
+│   │   │   ├── system.py                   # ✅ CPU/RAM (vendor-independent)
+│   │   │   ├── nvidia.py                   # ✅ NvidiaGpuProvider (pynvml)
 │   │   │   ├── apple_silicon.py            # ⏳ future
 │   │   │   └── amd_rocm.py                 # ⏳ future
 │   │   ├── adapters/
@@ -163,8 +162,9 @@ llm-max/
 │   │   │   └── privacy.py                  # consent/redaction, not an afterthought
 │   │   └── observability/                  # ⏳ Phase 4 — logging, metrics, health
 │   ├── tests/
-│   │   ├── unit/                           # ✅ 21 passing tests
-│   │   ├── fixtures/                       # ✅ shared mock hardware profiles
+│   │   ├── unit/                           # ✅ 42 passing tests
+│   │   ├── fixtures/                       # ✅ shared mock hardware profiles + Ollama response payloads
+│   │   ├── fakes/                          # ✅ FakeGpuProvider, FakeOllamaAdapter
 │   │   ├── integration/                    # ⏳ real Ollama/NVIDIA integration tests
 │   │   └── e2e/                            # ⏳ full scan→models→pull→run flow
 │   ├── pyproject.toml                      # ✅
@@ -199,24 +199,23 @@ llm-max/
 │   ├── TELEMETRY_PRIVACY.md                # ⏳
 │   └── OPERATIONS.md                       # ⏳
 ├── .github/
-│   ├── ISSUE_TEMPLATE/                     # ⏳
-│   ├── PULL_REQUEST_TEMPLATE.md            # ⏳
+│   ├── ISSUE_TEMPLATE/                     # ✅
+│   ├── PULL_REQUEST_TEMPLATE.md            # ✅
 │   └── workflows/
 │       ├── ci-core.yml                     # ✅
 │       ├── ci-webui.yml                    # ⏳
 │       ├── ci-streaming.yml                # ⏳
 │       └── release.yml                     # ⏳
-├── .env.example                            # ⏳
-├── .pre-commit-config.yaml                 # ⏳
-├── Makefile                                # ⏳
+├── .env.example                            # ✅
+├── .pre-commit-config.yaml                 # ✅
+├── Makefile                                # ✅
 ├── .gitignore                              # ✅
 ├── LICENSE                                 # ✅
 ├── README.md                               # ✅
 ├── CONTRIBUTING.md                         # ✅
-├── CODE_OF_CONDUCT.md                      # ⏳
-├── SECURITY.md                             # ⏳
-└── CHANGELOG.md                            # ⏳
-```
+├── CODE_OF_CONDUCT.md                      # ✅
+├── SECURITY.md                             # ✅
+└── CHANGELOG.md                            # ✅
 
 **Note on `deploy/`:** the product spec's own non-goals say "focus on
 single-machine, single-user scenarios" — Helm/Kubernetes assets are fleet

@@ -1,0 +1,33 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "llm-max"
+version = "0.1.0"
+description = "Profiles your hardware, recommends LLMs that fit, and tunes them for max performance."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+dependencies = [
+    "click>=8.1",
+    "psutil>=5.9",
+    "requests>=2.31",
+    "rich>=13.7",
+    "pydantic>=2.5",
+]
+
+[project.optional-dependencies]
+gpu = ["nvidia-ml-py>=12.550"]
+dev = [
+    "pytest>=8.0",
+    "pytest-mock>=3.12",
+    "nvidia-ml-py>=12.550",
+]
+
+[project.scripts]
+llm-max = "llm_max.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["llm_max*"]

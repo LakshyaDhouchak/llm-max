@@ -34,7 +34,7 @@ Look at `ollama.py` as the reference implementation. Adapters must:
 ## Adding a model to the catalog
 
 Add an entry to `core/llm_max/catalog/models.json` following the existing
-schema (`ModelSpec` in `core/llm_max/models.py`). VRAM figures should be for
+schema (`ModelSpec` in `core/llm_max/domain.py`). VRAM figures should be for
 the most common quantization (`Q4_K_M`) unless noted.
 
 ## Code style
@@ -46,5 +46,5 @@ the most common quantization (`Q4_K_M`) unless noted.
 ## Pull requests
 
 - Keep PRs focused on one change.
-- Add/update tests for any logic change (especially `catalog/classify`).
+- Add/update tests for any logic change (especially `compatibility/estimator.py`).
 - Reference the relevant roadmap phase in your PR description if applicable.
