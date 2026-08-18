@@ -16,6 +16,29 @@ pip install -e ".[dev]"
 llm-max scan
 ```
 
+### Windows: "llm-max is not recognized" after install
+
+If `pip install` succeeds but `llm-max` or `pytest` aren't found afterward,
+pip installed them to your user Scripts folder, which isn't on PATH yet —
+this is a common pip/Windows issue, not specific to this project. Fix it
+once, permanently, per user account:
+
+```powershell
+[Environment]::SetEnvironmentVariable(
+    "Path",
+    $env:Path + ";$env:APPDATA\Python\Python3XX\Scripts",  # match your Python version, e.g. Python314
+    "User"
+)
+```
+
+Then **close and reopen PowerShell** (PATH changes only apply to new
+sessions) and retry. The exact path was shown in your `pip install` output
+as a warning — copy it from there rather than guessing the version number.
+
+**Alternative (no restart needed):** run the tools by their full path once
+to confirm they work, e.g.
+`& "$env:APPDATA\Python\Python3XX\Scripts\llm-max.exe" --help`.
+
 ## Architecture
 
 See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the full design.
