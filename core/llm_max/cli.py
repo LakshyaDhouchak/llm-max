@@ -101,12 +101,39 @@ def pull(model_id: str):
         raise SystemExit(1)
 
     console.print(f"Pulling [bold]{model_id}[/bold] via Ollama...")
-    last_status = None
-    for event in adapter.pull(model_id):
-        status = event.get("status")
-        if status and status != last_status:
-            console.print(f"  {status}")
-            last_status = status
+
+    from rich.progress import (
+        BarColumn,
+        DownloadColumn,
+        Progress,
+        TextColumn,
+        TransferSpeedColumn,
+    )
+
+    tasks = {}
+    with Progress(
+        TextColumn("[bold blue]{task.description}"),
+        BarColumn(),
+        DownloadColumn(),
+        TransferSpeedColumn(),
+        console=console,
+    ) as progress:
+        for event in adapter.pull(model_id):
+            status = event.get("status", "")
+            digest = event.get("digest")
+            total = event.get("total")
+            completed = event.get("completed")
+
+            if digest and total:
+                key = digest[:12]
+                if key not in tasks:
+                    tasks[key] = progress.add_task(key, total=total)
+                progress.update(tasks[key], completed=completed or 0)
+            elif status:
+                # non-download events: "pulling manifest", "verifying sha256
+                # digest", "writing manifest", "success"
+                progress.console.print(f"  {status}")
+
     console.print(f"[green]Done.[/green] Run it with: llm-max run {model_id}")
 
 
