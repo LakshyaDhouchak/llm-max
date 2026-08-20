@@ -5,10 +5,13 @@ from rich.console import Console
 from rich.table import Table
 
 from llm_max.adapters.ollama import OllamaAdapter
+from llm_max.catalog import load_catalog
 from llm_max.compatibility import classify_all
-from llm_max.domain import CompatibilityTier, RunRecord
+from llm_max.config import redis_enabled
+from llm_max.domain import CompatibilityTier
+from llm_max.launcher import LauncherService, RuntimeUnavailableError
 from llm_max.profiler import scan_hardware
-from llm_max.storage import SqliteStore
+from llm_max.storage import get_storage
 
 console = Console()
 
@@ -92,13 +95,7 @@ def models():
 @click.argument("model_id")
 def pull(model_id: str):
     """Download a model via Ollama."""
-    adapter = OllamaAdapter()
-    if not adapter.is_available():
-        console.print(
-            "[red]Ollama doesn't seem to be running[/red] "
-            "(expected at http://localhost:11434). Install/start it and retry."
-        )
-        raise SystemExit(1)
+    service = LauncherService(adapter=OllamaAdapter(), storage=get_storage())
 
     console.print(f"Pulling [bold]{model_id}[/bold] via Ollama...")
 
@@ -111,28 +108,33 @@ def pull(model_id: str):
     )
 
     tasks = {}
-    with Progress(
-        TextColumn("[bold blue]{task.description}"),
-        BarColumn(),
-        DownloadColumn(),
-        TransferSpeedColumn(),
-        console=console,
-    ) as progress:
-        for event in adapter.pull(model_id):
-            status = event.get("status", "")
-            digest = event.get("digest")
-            total = event.get("total")
-            completed = event.get("completed")
+    try:
+        with Progress(
+            TextColumn("[bold blue]{task.description}"),
+            BarColumn(),
+            DownloadColumn(),
+            TransferSpeedColumn(),
+            console=console,
+        ) as progress:
+            for event in service.pull(model_id):
+                status = event.get("status", "")
+                digest = event.get("digest")
+                total = event.get("total")
+                completed = event.get("completed")
 
-            if digest and total:
-                key = digest[:12]
-                if key not in tasks:
-                    tasks[key] = progress.add_task(key, total=total)
-                progress.update(tasks[key], completed=completed or 0)
-            elif status:
-                # non-download events: "pulling manifest", "verifying sha256
-                # digest", "writing manifest", "success"
-                progress.console.print(f"  {status}")
+                if digest and total:
+                    key = digest[:12]
+                    if key not in tasks:
+                        tasks[key] = progress.add_task(key, total=total)
+                    progress.update(tasks[key], completed=completed or 0)
+                elif status:
+                    progress.console.print(f"  {status}")
+    except RuntimeUnavailableError:
+        console.print(
+            "[red]Ollama doesn't seem to be running[/red] "
+            "(expected at http://localhost:11434). Install/start it and retry."
+        )
+        raise SystemExit(1)
 
     console.print(f"[green]Done.[/green] Run it with: llm-max run {model_id}")
 
@@ -142,16 +144,23 @@ def pull(model_id: str):
 @click.option("--prompt", "-p", default="Hello! Briefly introduce yourself.")
 def run(model_id: str, prompt: str):
     """Run a prompt against a model via Ollama and report timing."""
-    adapter = OllamaAdapter()
-    if not adapter.is_available():
+    storage = get_storage()
+    service = LauncherService(adapter=OllamaAdapter(), storage=storage)
+
+    # If model_id is in our curated catalog, use its VRAM profile to tune
+    # runtime options (context size) to the detected hardware. Unknown/
+    # custom models fall back to the runtime's own defaults.
+    model_spec = next((m for m in load_catalog() if m.id == model_id), None)
+
+    try:
+        with console.status(f"Running {model_id}..."):
+            result = service.run(model_id, prompt, model_spec=model_spec)
+    except RuntimeUnavailableError:
         console.print(
             "[red]Ollama doesn't seem to be running[/red] "
             "(expected at http://localhost:11434)."
         )
         raise SystemExit(1)
-
-    with console.status(f"Running {model_id}..."):
-        result = adapter.run(model_id, prompt)
 
     console.print(result["response"])
     console.print(
@@ -165,17 +174,11 @@ def run(model_id: str, prompt: str):
         + "[/dim]"
     )
 
-    store = SqliteStore()
-    store.save_run(
-        RunRecord(
-            model_id=model_id,
-            runtime="ollama",
-            prompt=prompt,
-            tokens_generated=result["tokens_generated"],
-            total_duration_s=result["total_duration_s"],
-            tokens_per_sec=result["tokens_per_sec"],
+    if getattr(storage, "last_used_fallback", False):
+        console.print(
+            "[yellow]Note:[/yellow] MySQL was unreachable — this run was "
+            "saved to local SQLite instead."
         )
-    )
 
 
 @main.command()
@@ -183,8 +186,14 @@ def run(model_id: str, prompt: str):
 @click.option("--limit", default=20, help="Max number of records to show.")
 def history(model_id: str | None, limit: int):
     """Show recent `llm-max run` history from local storage."""
-    store = SqliteStore()
+    store = get_storage()
     runs = store.list_runs(model_id=model_id, limit=limit)
+
+    if getattr(store, "last_used_fallback", False):
+        console.print(
+            "[yellow]Note:[/yellow] MySQL was unreachable — showing local "
+            "SQLite history instead.\n"
+        )
 
     if not runs:
         console.print("No run history yet — try [bold]llm-max run <model>[/bold] first.")
@@ -206,6 +215,48 @@ def history(model_id: str | None, limit: int):
             f"{r.tokens_per_sec}" if r.tokens_per_sec else "-",
         )
     console.print(table)
+
+    
+@main.command()
+def status():
+    """Show current hardware status, using a Redis cache if enabled."""
+    profile = None
+    cache_hit = False
+
+    if redis_enabled():
+        from llm_max.storage.redis_client import StatusCache
+
+        cache = StatusCache()
+        profile = cache.get_last_scan()
+        cache_hit = profile is not None
+
+    if profile is None:
+        with console.status("Scanning hardware..."):
+            profile = scan_hardware()
+        if redis_enabled():
+            cache.set_last_scan(profile)
+
+    source = "[dim](from Redis cache)[/dim]" if cache_hit else "[dim](fresh scan)[/dim]"
+    console.print(f"Hardware status {source}\n")
+
+    if profile.has_gpu:
+        table = Table(title="GPU(s)")
+        table.add_column("Name")
+        table.add_column("VRAM (free/total)")
+        for gpu in profile.gpus:
+            table.add_row(gpu.name, f"{gpu.free_vram_mb} / {gpu.total_vram_mb} MB")
+        console.print(table)
+    else:
+        console.print("[yellow]No GPU detected[/yellow]")
+
+    console.print(
+        f"CPU: {profile.cpu_cores_physical} physical / "
+        f"{profile.cpu_cores_logical} logical cores"
+    )
+    console.print(
+        f"RAM: {profile.available_ram_mb:,} MB available / "
+        f"{profile.total_ram_mb:,} MB total"
+    )
 
 
 if __name__ == "__main__":

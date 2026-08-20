@@ -1,0 +1,54 @@
+# Phase 2 minimal services: MySQL + Redis + Flyway (runs migrations once, then exits).
+#
+# Usage:
+#   docker compose -f docker/docker-compose.min.yml up -d mysql redis
+#   docker compose -f docker/docker-compose.min.yml up flyway   # runs migrations, exits
+#
+# Requires a .env file at the repo root (copy from .env.example).
+
+services:
+  mysql:
+    image: mysql:8.0
+    restart: unless-stopped
+    environment:
+      MYSQL_DATABASE: ${MYSQL_DATABASE:-llm_max}
+      MYSQL_USER: ${MYSQL_USER:-llm_max}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:-changeme}
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-changeme}
+    ports:
+      - "${MYSQL_PORT:-3307}:3306"
+    volumes:
+      - llm_max_mysql_data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "root", "-p${MYSQL_ROOT_PASSWORD:-changeme}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  flyway:
+    image: flyway/flyway:10
+    depends_on:
+      mysql:
+        condition: service_healthy
+    command:
+      - "-url=jdbc:mysql://mysql:3306/${MYSQL_DATABASE:-llm_max}?allowPublicKeyRetrieval=true&useSSL=false"
+      - "-user=${MYSQL_USER:-llm_max}"
+      - "-password=${MYSQL_PASSWORD:-changeme}"
+      - "-connectRetries=10"
+      - "migrate"
+    volumes:
+      - ../migrations/sql:/flyway/sql
+
+volumes:
+  llm_max_mysql_data:

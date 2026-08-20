@@ -47,5 +47,5 @@ class FakeOllamaAdapter(RuntimeAdapter):
         self._installed.append(InstalledModel(id=model_id))
 
     def run(self, model_id: str, prompt: str, options: dict | None = None) -> dict:
-        self.run_calls.append((model_id, prompt))
+        self.run_calls.append((model_id, prompt, options))
         return self._run_response
