@@ -13,7 +13,7 @@ import json
 import sqlite3
 from pathlib import Path
 
-from llm_max.domain import RunRecord, TunedConfig
+from llm_max.domain import AutopilotEvent, RunRecord, TunedConfig
 from llm_max.storage.base import Storage
 
 DEFAULT_DB_PATH = Path.home() / ".llm-max" / "llm-max.db"
@@ -39,8 +39,17 @@ CREATE TABLE IF NOT EXISTS tuned_configs (
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
+CREATE TABLE IF NOT EXISTS autopilot_events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    model_id TEXT NOT NULL,
+    event_type TEXT NOT NULL,
+    details_json TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
 CREATE INDEX IF NOT EXISTS idx_run_records_model_id ON run_records(model_id);
 CREATE INDEX IF NOT EXISTS idx_tuned_configs_model_id ON tuned_configs(model_id);
+CREATE INDEX IF NOT EXISTS idx_autopilot_events_model_id ON autopilot_events(model_id);
 """
 
 
@@ -144,6 +153,40 @@ class SqliteStore(Storage):
                 (model_id, model_id),
             )
 
+    def save_autopilot_event(self, event: AutopilotEvent) -> AutopilotEvent:
+        with self._connect() as conn:
+            cursor = conn.execute(
+                """
+                INSERT INTO autopilot_events (model_id, event_type, details_json)
+                VALUES (?, ?, ?)
+                """,
+                (event.model_id, event.event_type, json.dumps(event.details)),
+            )
+            row = conn.execute(
+                "SELECT * FROM autopilot_events WHERE id = ?", (cursor.lastrowid,)
+            ).fetchone()
+            return _row_to_autopilot_event(row)
+
+    def list_autopilot_events(
+        self, model_id: str | None = None, limit: int = 20
+    ) -> list[AutopilotEvent]:
+        with self._connect() as conn:
+            if model_id:
+                rows = conn.execute(
+                    """
+                    SELECT * FROM autopilot_events
+                    WHERE model_id = ?
+                    ORDER BY created_at DESC, id DESC LIMIT ?
+                    """,
+                    (model_id, limit),
+                ).fetchall()
+            else:
+                rows = conn.execute(
+                    "SELECT * FROM autopilot_events ORDER BY created_at DESC, id DESC LIMIT ?",
+                    (limit,),
+                ).fetchall()
+            return [_row_to_autopilot_event(r) for r in rows]
+
 
 def _row_to_run_record(row: sqlite3.Row) -> RunRecord:
     return RunRecord(
@@ -165,5 +208,15 @@ def _row_to_tuned_config(row: sqlite3.Row) -> TunedConfig:
         runtime=row["runtime"],
         config=json.loads(row["config_json"]),
         is_locked=bool(row["is_locked"]),
+        created_at=row["created_at"],
+    )
+
+
+def _row_to_autopilot_event(row: sqlite3.Row) -> AutopilotEvent:
+    return AutopilotEvent(
+        id=row["id"],
+        model_id=row["model_id"],
+        event_type=row["event_type"],
+        details=json.loads(row["details_json"]),
         created_at=row["created_at"],
     )

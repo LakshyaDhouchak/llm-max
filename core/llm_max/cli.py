@@ -5,6 +5,8 @@ from rich.console import Console
 from rich.table import Table
 
 from llm_max.adapters.ollama import OllamaAdapter
+from llm_max.autotune import RuntimeUnavailableError as TuneRuntimeUnavailableError
+from llm_max.autotune import TuningEngine, TuningOutcome
 from llm_max.catalog import load_catalog
 from llm_max.compatibility import classify_all
 from llm_max.config import redis_enabled
@@ -20,6 +22,13 @@ _TIER_STYLE = {
     CompatibilityTier.WILL_RUN: ("Will run", "yellow"),
     CompatibilityTier.MAY_BE_SLOW: ("May be slow", "dark_orange"),
     CompatibilityTier.NOT_RECOMMENDED: ("Not recommended", "red"),
+}
+
+_OUTCOME_STYLE = {
+    TuningOutcome.ACCEPTED_NEW: ("Applied new config", "bold green"),
+    TuningOutcome.KEPT_BASELINE: ("Kept existing config", "yellow"),
+    TuningOutcome.ROLLED_BACK: ("Rolled back", "bold red"),
+    TuningOutcome.LOCKED: ("Locked — skipped", "dim"),
 }
 
 
@@ -147,9 +156,6 @@ def run(model_id: str, prompt: str):
     storage = get_storage()
     service = LauncherService(adapter=OllamaAdapter(), storage=storage)
 
-    # If model_id is in our curated catalog, use its VRAM profile to tune
-    # runtime options (context size) to the detected hardware. Unknown/
-    # custom models fall back to the runtime's own defaults.
     model_spec = next((m for m in load_catalog() if m.id == model_id), None)
 
     try:
@@ -216,7 +222,7 @@ def history(model_id: str | None, limit: int):
         )
     console.print(table)
 
-    
+
 @main.command()
 def status():
     """Show current hardware status, using a Redis cache if enabled."""
@@ -257,6 +263,168 @@ def status():
         f"RAM: {profile.available_ram_mb:,} MB available / "
         f"{profile.total_ram_mb:,} MB total"
     )
+
+
+def _print_tuning_session(session, model_id: str) -> None:
+    label, style = _OUTCOME_STYLE[session.outcome]
+    console.print(f"[{style}]{label}[/{style}] — {session.reason}\n")
+
+    table = Table(title=f"Benchmark results for {model_id}")
+    table.add_column("Config")
+    table.add_column("Tok/s")
+    table.add_column("p50 latency")
+    table.add_column("p95 latency")
+    table.add_column("Status")
+
+    rows = [("baseline", session.baseline)] + [
+        ("candidate", c) for c in session.candidates if c.config != session.baseline.config
+    ]
+    for label_prefix, candidate in rows:
+        b = candidate.benchmark
+        is_winner = candidate.config == session.winner.config
+        marker = " *" if is_winner else ""
+        status_text = (
+            "OOM" if b.oom_occurred else ("failed" if not b.succeeded else "ok")
+        )
+        table.add_row(
+            f"{candidate.config}{marker}",
+            f"{b.tokens_per_sec:.1f}" if b.tokens_per_sec else "-",
+            f"{b.p50_latency_s:.2f}s" if b.p50_latency_s else "-",
+            f"{b.p95_latency_s:.2f}s" if b.p95_latency_s else "-",
+            status_text,
+        )
+    console.print(table)
+    console.print("[dim]* = winning config[/dim]")
+
+
+@main.command()
+@click.argument("model_id")
+@click.option(
+    "--dry-run", is_flag=True, help="Benchmark and show the recommendation without saving it."
+)
+def tune(model_id: str, dry_run: bool):
+    """One-shot: benchmark a model against a small set of configs and
+    apply whichever performs best."""
+    storage = get_storage()
+    engine = TuningEngine(adapter=OllamaAdapter(), storage=storage)
+    model_spec = next((m for m in load_catalog() if m.id == model_id), None)
+
+    try:
+        with console.status(f"Benchmarking {model_id} (this runs several prompts per config)..."):
+            session = engine.tune_once(model_id, model_spec=model_spec)
+    except TuneRuntimeUnavailableError:
+        console.print(
+            "[red]Ollama doesn't seem to be running[/red] "
+            "(expected at http://localhost:11434)."
+        )
+        raise SystemExit(1)
+
+    _print_tuning_session(session, model_id)
+
+    if session.outcome == TuningOutcome.ACCEPTED_NEW:
+        if dry_run:
+            console.print("\n[dim]Dry run — config not saved.[/dim]")
+        else:
+            engine.apply(session)
+            console.print(f"\n[green]Saved.[/green] {model_id} will now run with {session.winner.config}.")
+    else:
+        console.print("\nNo change made.")
+
+
+@main.group()
+def autopilot():
+    """Continuous background tuning for a model.
+
+    Runs in the foreground until stopped (Ctrl+C) — never starts itself
+    silently. See docs/PHASE3_DESIGN.md section 5 for why this boundary
+    is deliberate.
+    """
+
+
+@autopilot.command("enable")
+@click.argument("model_id")
+@click.option("--interval", default=3600, help="Seconds between tuning passes.")
+@click.option(
+    "--max-iterations",
+    default=None,
+    type=int,
+    help="Stop after N iterations (mainly useful for testing/demoing).",
+)
+def autopilot_enable(model_id: str, interval: int, max_iterations: int | None):
+    """Start continuous tuning for MODEL_ID. Runs until Ctrl+C."""
+    storage = get_storage()
+    engine = TuningEngine(adapter=OllamaAdapter(), storage=storage)
+    model_spec = next((m for m in load_catalog() if m.id == model_id), None)
+
+    console.print(
+        f"Starting autopilot for [bold]{model_id}[/bold] "
+        f"(checking every {interval}s). Press Ctrl+C to stop.\n"
+    )
+
+    try:
+        for session in engine.autopilot_loop(
+            model_id,
+            model_spec=model_spec,
+            interval_seconds=interval,
+            max_iterations=max_iterations,
+        ):
+            label, style = _OUTCOME_STYLE[session.outcome]
+            console.print(f"[{style}]{label}[/{style}] — {session.reason}")
+            if session.outcome == TuningOutcome.LOCKED:
+                break
+    except TuneRuntimeUnavailableError:
+        console.print(
+            "[red]Ollama doesn't seem to be running[/red] "
+            "(expected at http://localhost:11434)."
+        )
+        raise SystemExit(1)
+    except KeyboardInterrupt:
+        console.print("\nAutopilot stopped.")
+
+
+@autopilot.command("disable")
+@click.argument("model_id")
+def autopilot_disable(model_id: str):
+    """Lock MODEL_ID's current config so autopilot skips it."""
+    store = get_storage()
+    existing = store.get_tuned_config(model_id)
+    if existing is None:
+        console.print(
+            f"No tuned config exists yet for [bold]{model_id}[/bold] — "
+            "run [bold]llm-max tune[/bold] first."
+        )
+        return
+    store.lock_config(model_id)
+    console.print(f"[green]Locked.[/green] Autopilot will skip {model_id} until unlocked.")
+
+
+@autopilot.command("status")
+@click.argument("model_id")
+def autopilot_status(model_id: str):
+    """Show the current saved config and recent autopilot events for MODEL_ID."""
+    store = get_storage()
+    config = store.get_tuned_config(model_id)
+
+    if config is None:
+        console.print(f"No tuned config saved yet for [bold]{model_id}[/bold].")
+        return
+
+    console.print(f"Current config: [bold]{config.config}[/bold]")
+    console.print(f"Locked: {'yes' if config.is_locked else 'no'}")
+    console.print(f"Saved at: {config.created_at}\n")
+
+    events = store.list_autopilot_events(model_id=model_id, limit=10)
+    if not events:
+        console.print("[dim]No autopilot events logged yet.[/dim]")
+        return
+
+    table = Table(title="Recent autopilot events")
+    table.add_column("When")
+    table.add_column("Event")
+    table.add_column("Details")
+    for e in events:
+        table.add_row(e.created_at or "-", e.event_type, str(e.details))
+    console.print(table)
 
 
 if __name__ == "__main__":

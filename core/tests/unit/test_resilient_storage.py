@@ -1,6 +1,6 @@
 import pytest
 
-from llm_max.domain import RunRecord, TunedConfig
+from llm_max.domain import AutopilotEvent, RunRecord, TunedConfig
 from llm_max.storage.base import Storage
 from llm_max.storage.resilient import FallbackStorage
 
@@ -28,6 +28,14 @@ class WorkingStorage(Storage):
     def lock_config(self, model_id):
         self.calls.append(("lock_config", model_id))
 
+    def save_autopilot_event(self, event):
+        self.calls.append(("save_autopilot_event", event))
+        return event.model_copy(update={"id": 1})
+
+    def list_autopilot_events(self, model_id=None, limit=20):
+        self.calls.append(("list_autopilot_events", model_id, limit))
+        return []
+
 
 class BrokenStorage(Storage):
     """Simulates an unreachable backend — every method raises."""
@@ -47,9 +55,18 @@ class BrokenStorage(Storage):
     def lock_config(self, model_id):
         raise ConnectionError("simulated connection failure")
 
+    def save_autopilot_event(self, event):
+        raise ConnectionError("simulated connection failure")
+
+    def list_autopilot_events(self, model_id=None, limit=20):
+        raise ConnectionError("simulated connection failure")
+
 
 SAMPLE_RUN = RunRecord(
-    model_id="m", prompt="p", tokens_generated=1, total_duration_s=1.0
+    model_id="m",
+    prompt="p",
+    tokens_generated=1,
+    total_duration_s=1.0,
 )
 
 
@@ -126,7 +143,11 @@ def test_save_tuned_config_falls_back():
     fallback = WorkingStorage()
     storage = FallbackStorage(primary=primary, fallback=fallback)
 
-    config = TunedConfig(model_id="m", config={"num_ctx": 2048})
+    config = TunedConfig(
+        model_id="m",
+        config={"num_ctx": 2048},
+    )
+
     result = storage.save_tuned_config(config)
 
     assert fallback.calls == [("save_tuned_config", config)]

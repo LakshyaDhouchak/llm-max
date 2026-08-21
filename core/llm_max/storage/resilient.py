@@ -15,7 +15,7 @@ just a curated subset of error types.
 
 from __future__ import annotations
 
-from llm_max.domain import RunRecord, TunedConfig
+from llm_max.domain import RunRecord, TunedConfig, AutopilotEvent
 from llm_max.storage.base import Storage
 
 
@@ -53,3 +53,11 @@ class FallbackStorage(Storage):
 
     def lock_config(self, model_id: str) -> None:
         return self._call("lock_config", model_id)
+
+    def save_autopilot_event(self, event: AutopilotEvent) -> AutopilotEvent:
+        return self._call("save_autopilot_event", event)
+
+    def list_autopilot_events(
+        self, model_id: str | None = None, limit: int = 20
+    ) -> list[AutopilotEvent]:
+        return self._call("list_autopilot_events", model_id=model_id, limit=limit)

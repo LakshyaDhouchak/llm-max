@@ -93,3 +93,16 @@ class TunedConfig(BaseModel):
     config: dict  # e.g. {"num_ctx": 4096, "num_batch": 512}
     is_locked: bool = False
     created_at: Optional[str] = None
+
+
+class AutopilotEvent(BaseModel):
+    """An audit-trail entry for an autotune decision — every adjust,
+    rollback, lock, enable, or disable gets one. This is what makes
+    autopilot's behavior inspectable after the fact rather than a black
+    box, and what `llm-max autopilot status` reads from."""
+
+    id: Optional[int] = None
+    model_id: str
+    event_type: str  # "adjust" | "rollback" | "lock" | "enable" | "disable"
+    details: dict = Field(default_factory=dict)
+    created_at: Optional[str] = None

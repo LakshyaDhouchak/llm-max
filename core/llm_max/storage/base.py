@@ -1,15 +1,15 @@
 """Storage interface.
 
-`SqliteStore` (Phase 1/2, local, zero-infra) and the future `mysql_client.py`
-(Phase 2, team/server deployment) both implement this contract, so the CLI
-and agentd never need to know which backend is active.
+`SqliteStore` (Phase 1/2, local, zero-infra) and `MySqlStore` (Phase 2,
+team/server deployment) both implement this contract, so the CLI and
+agentd never need to know which backend is active.
 """
 
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
 
-from llm_max.domain import RunRecord, TunedConfig
+from llm_max.domain import AutopilotEvent, RunRecord, TunedConfig
 
 
 class Storage(ABC):
@@ -32,3 +32,14 @@ class Storage(ABC):
     @abstractmethod
     def lock_config(self, model_id: str) -> None:
         """Mark a model's current tuned config as locked (won't be auto-tuned)."""
+
+    @abstractmethod
+    def save_autopilot_event(self, event: AutopilotEvent) -> AutopilotEvent:
+        """Persist an autopilot audit-trail event."""
+
+    @abstractmethod
+    def list_autopilot_events(
+        self, model_id: str | None = None, limit: int = 20
+    ) -> list[AutopilotEvent]:
+        """List recent autopilot events, most recent first, optionally
+        filtered by model."""
