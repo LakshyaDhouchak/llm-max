@@ -29,6 +29,7 @@ class TuningOutcome(str, Enum):
     KEPT_BASELINE = "kept_baseline"
     ROLLED_BACK = "rolled_back"
     LOCKED = "locked"
+    RATE_LIMITED = "rate_limited"
 
 
 class TuningSession(BaseModel):

@@ -29,6 +29,7 @@ _OUTCOME_STYLE = {
     TuningOutcome.KEPT_BASELINE: ("Kept existing config", "yellow"),
     TuningOutcome.ROLLED_BACK: ("Rolled back", "bold red"),
     TuningOutcome.LOCKED: ("Locked — skipped", "dim"),
+    TuningOutcome.RATE_LIMITED: ("Rate limited — skipped", "dark_orange"),
 }
 
 

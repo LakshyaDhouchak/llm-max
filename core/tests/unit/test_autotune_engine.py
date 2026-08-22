@@ -195,3 +195,98 @@ def test_locked_config_logs_event():
     events = storage.list_autopilot_events(model_id="model:1b")
     assert len(events) == 1
     assert events[0].event_type == "lock"
+
+
+def test_rate_limit_blocks_adjustment_after_cap_reached():
+    """With max_adjustments_per_day=1, the first genuinely-better config
+    gets applied; a second one shortly after (same simulated day) should
+    be blocked, not applied."""
+
+    class AlternatingAdapter(FakeOllamaAdapter):
+        """First iteration: 4096 wins. Second iteration (baseline now
+        4096): make 8192 look even better, to try to trigger a second
+        adjustment within the same rate-limit window."""
+
+        def run(self, model_id, prompt, options=None):
+            ctx = (options or {}).get("num_ctx")
+            tps = {1024: 40.0, 2048: 50.0, 4096: 100.0, 8192: 200.0}.get(ctx, 50.0)
+            self.run_calls.append((model_id, prompt, options))
+            return _response(tps)
+
+    storage = InMemoryStorage()
+    adapter = AlternatingAdapter()
+    engine = TuningEngine(adapter=adapter, storage=storage)
+
+    fake_now = {"t": 1000.0}
+    sessions = list(
+        engine.autopilot_loop(
+            "model:1b",
+            max_iterations=2,
+            sleep_fn=lambda s: None,
+            max_adjustments_per_day=1,
+            now_fn=lambda: fake_now["t"],
+        )
+    )
+
+    assert sessions[0].outcome == TuningOutcome.ACCEPTED_NEW
+    assert sessions[0].winner.config == {"num_ctx": 4096}
+
+    assert sessions[1].outcome == TuningOutcome.RATE_LIMITED
+    assert storage.get_tuned_config("model:1b").config == {"num_ctx": 4096}
+
+
+def test_rate_limit_resets_after_24_hours():
+    class AlternatingAdapter(FakeOllamaAdapter):
+        def run(self, model_id, prompt, options=None):
+            ctx = (options or {}).get("num_ctx")
+            tps = {1024: 40.0, 2048: 50.0, 4096: 100.0, 8192: 200.0}.get(ctx, 50.0)
+            self.run_calls.append((model_id, prompt, options))
+            return _response(tps)
+
+    storage = InMemoryStorage()
+    adapter = AlternatingAdapter()
+    engine = TuningEngine(adapter=adapter, storage=storage)
+
+    fake_now = {"t": 1000.0}
+
+    def advancing_sleep(seconds):
+        fake_now["t"] += 90000  # jump forward >24h between iterations
+
+    sessions = list(
+        engine.autopilot_loop(
+            "model:1b",
+            max_iterations=2,
+            sleep_fn=advancing_sleep,
+            max_adjustments_per_day=1,
+            now_fn=lambda: fake_now["t"],
+        )
+    )
+
+    assert sessions[0].outcome == TuningOutcome.ACCEPTED_NEW
+    assert sessions[1].outcome == TuningOutcome.ACCEPTED_NEW
+    assert sessions[1].winner.config == {"num_ctx": 8192}
+
+
+def test_rate_limit_disabled_when_none():
+    class AlternatingAdapter(FakeOllamaAdapter):
+        def run(self, model_id, prompt, options=None):
+            ctx = (options or {}).get("num_ctx")
+            tps = {1024: 40.0, 2048: 50.0, 4096: 100.0, 8192: 200.0}.get(ctx, 50.0)
+            self.run_calls.append((model_id, prompt, options))
+            return _response(tps)
+
+    storage = InMemoryStorage()
+    adapter = AlternatingAdapter()
+    engine = TuningEngine(adapter=adapter, storage=storage)
+
+    sessions = list(
+        engine.autopilot_loop(
+            "model:1b",
+            max_iterations=2,
+            sleep_fn=lambda s: None,
+            max_adjustments_per_day=None,
+        )
+    )
+
+    assert sessions[0].outcome == TuningOutcome.ACCEPTED_NEW
+    assert sessions[1].outcome == TuningOutcome.ACCEPTED_NEW
