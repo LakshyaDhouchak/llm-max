@@ -1,0 +1,27 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "llm-max-agentd"
+version = "0.1.0"
+description = "Local HTTP daemon wrapping llm-max core, for the Phase 4 web UI."
+requires-python = ">=3.10"
+license = { text = "MIT" }
+dependencies = [
+    "llm-max",
+    "fastapi>=0.110",
+    "uvicorn[standard]>=0.29",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "pytest-mock>=3.12",
+    "httpx>=0.27",
+    "httpx2",
+]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["app*"]
