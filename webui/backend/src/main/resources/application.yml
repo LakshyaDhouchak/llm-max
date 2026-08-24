@@ -1,0 +1,21 @@
+server:
+  port: 8080
+
+llmmax:
+  agentd:
+    base-url: ${AGENTD_URL:http://127.0.0.1:8000}
+    # Connect/read timeouts are deliberately short — agentd is a local
+    # process, not a network service. A hung call here almost certainly
+    # means agentd itself is stuck (e.g. mid-benchmark), not network
+    # latency, so failing fast and surfacing that to the caller is more
+    # useful than waiting.
+    connect-timeout-ms: 2000
+    read-timeout-ms: 120000  # tune/run can legitimately take a while
+
+spring:
+  application:
+    name: llm-max-webui-backend
+
+logging:
+  level:
+    com.llmmax.webui: INFO
