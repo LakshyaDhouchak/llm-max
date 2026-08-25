@@ -42,6 +42,19 @@ class HardwareControllerTest {
     }
 
     @Test
+    void scan_v1Route_returnsHardwareProfileAsJson() throws Exception {
+        var profile = new HardwareProfileDto(
+                List.of(new GpuInfoDto(0, "Test GPU", 8192, 6000, 2192, "7.5", 10, 45)),
+                8, 16, "Test CPU", 16384, 8000
+        );
+        when(agentdClient.scanHardware()).thenReturn(profile);
+
+        mockMvc.perform(get("/api/v1/hardware"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.cpuCoresPhysical").value(8));
+    }
+
+    @Test
     void models_returnsCompatibilityList() throws Exception {
         var spec = new ModelSpecDto("m:1b", "M 1B", "m", 1.0, List.of("Q4_K_M"), 1500, 2500, 4000, null);
         var compat = new ModelCompatibilityDto(spec, "great_fit", "fits comfortably");
@@ -51,5 +64,16 @@ class HardwareControllerTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$[0].tier").value("great_fit"))
                 .andExpect(jsonPath("$[0].model.id").value("m:1b"));
+    }
+
+    @Test
+    void recommendations_v1Route_returnsCompatibilityList() throws Exception {
+        var spec = new ModelSpecDto("m:1b", "M 1B", "m", 1.0, List.of("Q4_K_M"), 1500, 2500, 4000, null);
+        var compat = new ModelCompatibilityDto(spec, "great_fit", "fits comfortably");
+        when(agentdClient.listModels()).thenReturn(List.of(compat));
+
+        mockMvc.perform(get("/api/v1/recommendations"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$[0].tier").value("great_fit"));
     }
 }
