@@ -11,7 +11,7 @@ import org.springframework.web.bind.annotation.*;
  * docstring for the reasoning — it applies unchanged at this layer.
  */
 @RestController
-@RequestMapping("/api/autopilot")
+@RequestMapping({"/api/autopilot", "/api/v1/autopilot"})
 public class RecommendationController {
 
     private final AgentdClient agentdClient;

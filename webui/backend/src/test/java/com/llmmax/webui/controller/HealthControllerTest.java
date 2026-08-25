@@ -23,6 +23,13 @@ class HealthControllerTest {
     }
 
     @Test
+    void health_v1Route_returnsOk() throws Exception {
+        mockMvc.perform(get("/api/v1/health"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("ok"));
+    }
+
+    @Test
     void health_allowsCorsFromDevFrontendOrigin() throws Exception {
         mockMvc.perform(get("/api/health").header(HttpHeaders.ORIGIN, "http://localhost:5173"))
                 .andExpect(status().isOk())

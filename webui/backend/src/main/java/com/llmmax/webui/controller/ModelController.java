@@ -13,7 +13,7 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
 @RestController
-@RequestMapping("/api/models")
+@RequestMapping({"/api/models", "/api/v1/models"})
 public class ModelController {
 
     private final AgentdClient agentdClient;

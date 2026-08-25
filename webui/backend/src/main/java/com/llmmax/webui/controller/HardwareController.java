@@ -10,7 +10,7 @@ import org.springframework.web.bind.annotation.RestController;
 import java.util.List;
 
 @RestController
-@RequestMapping("/api")
+@RequestMapping({"/api", "/api/v1"})
 public class HardwareController {
 
     private final AgentdClient agentdClient;
@@ -19,13 +19,24 @@ public class HardwareController {
         this.agentdClient = agentdClient;
     }
 
-    @GetMapping("/hardware/scan")
+    @GetMapping({"/hardware", "/hardware/scan"})
     public HardwareProfileDto scan() {
         return agentdClient.scanHardware();
     }
 
-    @GetMapping("/models")
+    @GetMapping({"/models", "/recommendations"})
     public List<ModelCompatibilityDto> models() {
         return agentdClient.listModels();
+    }
+
+    @GetMapping("/models/{modelId}")
+    public ModelCompatibilityDto model(@org.springframework.web.bind.annotation.PathVariable String modelId) {
+        return agentdClient.listModels().stream()
+                .filter(item -> item.model() != null && item.model().id().equalsIgnoreCase(modelId))
+                .findFirst()
+                .orElseThrow(() -> new org.springframework.web.server.ResponseStatusException(
+                        org.springframework.http.HttpStatus.NOT_FOUND,
+                        "Model '%s' not found".formatted(modelId)
+                ));
     }
 }

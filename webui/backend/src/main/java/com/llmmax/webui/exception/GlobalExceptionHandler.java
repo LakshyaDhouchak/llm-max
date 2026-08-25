@@ -1,54 +1,91 @@
 package com.llmmax.webui.exception;
 
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import jakarta.servlet.http.HttpServletRequest;
+import jakarta.validation.ConstraintViolationException;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.http.converter.HttpMessageNotReadableException;
+import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 import org.springframework.web.client.RestClientResponseException;
+import org.springframework.web.context.request.RequestContextHolder;
+import org.springframework.web.context.request.ServletRequestAttributes;
 
-/**
- * Two distinct failure modes get two distinct responses:
- *   - agentd unreachable at all -> 502, generic "backend unavailable" message.
- *   - agentd reachable but returned an error (e.g. 503 Ollama not running,
- *     404 no tuned config yet) -> pass agentd's own status code and
- *     message straight through, since agentd already produced a correct,
- *     specific error for the situation.
- */
+import java.util.Objects;
+
 @RestControllerAdvice
 public class GlobalExceptionHandler {
+    private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
 
     @ExceptionHandler(AgentdUnavailableException.class)
     public ResponseEntity<ErrorResponse> handleAgentdUnavailable(AgentdUnavailableException e) {
-        return ResponseEntity.status(HttpStatus.BAD_GATEWAY)
-                .body(new ErrorResponse(e.getMessage()));
+        return buildResponse(HttpStatus.BAD_GATEWAY, "AGENTD_UNAVAILABLE", e.getMessage());
     }
 
     @ExceptionHandler(RestClientResponseException.class)
     public ResponseEntity<ErrorResponse> handleAgentdErrorResponse(RestClientResponseException e) {
-        return ResponseEntity.status(e.getStatusCode())
-                .body(new ErrorResponse(extractDetail(e)));
+        return buildResponse(
+                HttpStatus.valueOf(e.getStatusCode().value()),
+                "AGENTD_ERROR",
+                extractDetail(e)
+        );
     }
 
-        private final com.fasterxml.jackson.databind.ObjectMapper objectMapper =
-            new com.fasterxml.jackson.databind.ObjectMapper();
+    @ExceptionHandler(MethodArgumentNotValidException.class)
+    public ResponseEntity<ErrorResponse> handleValidation(MethodArgumentNotValidException e) {
+        String message = Objects.requireNonNullElse(e.getBindingResult().getFieldError(), e.getBindingResult().getGlobalError())
+                == null ? "Validation failed" : Objects.requireNonNullElse(e.getBindingResult().getFieldError(), e.getBindingResult().getGlobalError()).getDefaultMessage();
+        return buildResponse(HttpStatus.BAD_REQUEST, "VALIDATION_ERROR", message);
+    }
+
+    @ExceptionHandler(HttpMessageNotReadableException.class)
+    public ResponseEntity<ErrorResponse> handleUnreadableBody(HttpMessageNotReadableException e) {
+        return buildResponse(HttpStatus.BAD_REQUEST, "VALIDATION_ERROR", "Request payload is malformed or missing required fields.");
+    }
+
+    @ExceptionHandler(ConstraintViolationException.class)
+    public ResponseEntity<ErrorResponse> handleConstraintViolation(ConstraintViolationException e) {
+        return buildResponse(HttpStatus.BAD_REQUEST, "VALIDATION_ERROR", e.getMessage());
+    }
+
+    @ExceptionHandler(Exception.class)
+    public ResponseEntity<ErrorResponse> handleGeneral(Exception e) {
+        return buildResponse(HttpStatus.INTERNAL_SERVER_ERROR, "INTERNAL_ERROR", "An unexpected server error occurred.");
+    }
+
+    private ResponseEntity<ErrorResponse> buildResponse(HttpStatus status, String code, String message) {
+        return ResponseEntity.status(status)
+                .body(new ErrorResponse(status.value(), code, message, requestId()));
+    }
+
+    private String requestId() {
+        var attrs = RequestContextHolder.getRequestAttributes();
+        if (attrs instanceof ServletRequestAttributes servletRequestAttributes) {
+            HttpServletRequest request = servletRequestAttributes.getRequest();
+            Object requestId = request.getAttribute("requestId");
+            if (requestId instanceof String value && !value.isBlank()) {
+                return value;
+            }
+        }
+        return null;
+    }
 
     private String extractDetail(RestClientResponseException e) {
-        // agentd (FastAPI/HTTPException) returns {"detail": "..."} on errors.
-        // Parsed directly from the raw body string (not via
-        // e.getResponseBodyAs()) since that method requires message
-        // converters wired into the exception at creation time — reliable
-        // for exceptions RestClient builds internally, but not guaranteed
-        // for exceptions constructed any other way. Parsing the raw string
-        // ourselves works unconditionally.
         String body = e.getResponseBodyAsString();
         try {
-            com.fasterxml.jackson.databind.JsonNode node = objectMapper.readTree(body);
+            JsonNode node = OBJECT_MAPPER.readTree(body);
             if (node.has("detail")) {
                 return node.get("detail").asText();
             }
+            if (node.has("message")) {
+                return node.get("message").asText();
+            }
         } catch (Exception ignored) {
-            // body wasn't JSON, or had no "detail" field — fall through
+            // body wasn't JSON, or had no recognized error field — fall through
         }
-        return body;
+        return body == null || body.isBlank() ? "Agentd request failed." : body;
     }
 }
